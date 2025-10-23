@@ -1,40 +1,15 @@
+#!/usr/bin/env python3
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import random 
-
 import pandas as pd
-
 import numpy as np
-
 import matplotlib.pyplot as plt
-
 from models.seismic_model import SeismicTsunamiEventLinkageModel
 from utils.preprocess import preprocess
 
-#setting random seed
-torch.manual_seed(42)
-np.random.seed(42)
-random.seed(42)
-
-#loading data
-x_train, x_test, y_train, y_test = preprocess()
-
-#creating model
-model = SeismicTsunamiEventLinkageModel(input_size=10, hidden_size=128, hidden_size2=64, hidden_size3=32, output_size=1)
-
-#defining loss function
-loss_function = nn.BCELoss()
-
-#defining optimizer
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-#defining number of epochs
-num_epochs = 10000
-user_patience =input("Enter the patience value: ")
-print("Training model...")
-
-# Early stopping class stays the same
 class EarlyStopping:
     def __init__(self, patience=10):
         self.patience = patience
@@ -46,41 +21,207 @@ class EarlyStopping:
             self.best_loss = loss.item()
             self.best_model_state = model.state_dict().copy()
             self.patience_counter = 0
+            print(f"  New best loss: {self.best_loss:.4f}")
         else:
             self.patience_counter += 1
             if self.patience_counter >= self.patience:
                 return True  # Should stop
         return False  # Should continue
 
-trainer = EarlyStopping(patience=int(user_patience))
-# Training loop
-early_stopped = False  # Flag to track if we stopped early
-for epoch in range(num_epochs):
-    optimizer.zero_grad()
-    # Forward pass
-    predictions = model(x_train)
-    # Calculate loss
-    loss = loss_function(predictions, y_train)
-    # Backward pass
-    loss.backward()
-    # Optimizer step
-    optimizer.step()
+def train(args):
+    print("Starting training...")
+    # Set random seeds
+    torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
     
-    # Print progress
-    if epoch % 100 == 0:
-        print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
+    # Load data
+    x_train, x_test, y_train, y_test = preprocess()
+    print(f"Training samples: {len(x_train)}")
     
-    # Early stopping check
-    if trainer.check_loss(loss, model):
-        print(f"\nEarly stopping triggered at epoch {epoch+1}")
-        print(f"No improvement for {trainer.patience} epochs")
-        print(f"Best loss was: {trainer.best_loss:.4f}")
-        early_stopped = True
-        break
+    # Create model
+    model = SeismicTsunamiEventLinkageModel(
+        input_size=10, 
+        hidden_size=128, 
+        hidden_size2=64, 
+        hidden_size3=32, 
+        output_size=1
+    )
+    
+    # Training setup
+    loss_function = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    trainer = EarlyStopping(patience=args.patience)
+    early_stopped = False
+    
+    # Training loop
+    for epoch in range(args.epochs):
+        optimizer.zero_grad()
+        predictions = model(x_train)
+        loss = loss_function(predictions, y_train)
+        loss.backward()
+        optimizer.step()
+        
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch+1}/{args.epochs}, Loss: {loss.item():.4f}")
+        
+        if trainer.check_loss(loss, model):
+            print(f"\nEarly stopping triggered at epoch {epoch+1}")
+            print(f"No improvement for {args.patience} epochs")
+            early_stopped = True
+            break
+    
+    # Save model
+    torch.save(trainer.best_model_state, args.save_path)
+    if early_stopped:
+        print(f"\nTraining stopped early. Best loss: {trainer.best_loss:.4f}")
+    else:
+        print(f"\nTraining completed all {args.epochs} epochs. Best loss: {trainer.best_loss:.4f}")
 
-# Save the best model and print final message
-torch.save(trainer.best_model_state, "models/tsunami_model.pth")
-if early_stopped:
-    print(f"\nTraining stopped early. Best model saved with loss: {trainer.best_loss:.4f}")
-else:
-    print(f"\nTraining completed all {num_epochs} epochs. Best model saved with loss: {trainer.best_loss:.4f}")
+def test(args):
+    print("Testing model...")
+    x_train, x_test, y_train, y_test = preprocess()
+    print(f"Test samples: {len(x_test)}")
+    
+    model = SeismicTsunamiEventLinkageModel(
+        input_size=10, 
+        hidden_size=128, 
+        hidden_size2=64, 
+        hidden_size3=32, 
+        output_size=1
+    )
+    
+    try:
+        model.load_state_dict(torch.load(args.model_path))
+        print("Model loaded successfully")
+        
+        model.eval()
+        with torch.no_grad():
+            predictions = model(x_test)
+            loss = nn.BCELoss()(predictions, y_test)
+            pred_labels = (predictions >= args.threshold).float()
+            accuracy = (pred_labels == y_test).float().mean()
+            
+            print("\nTest Results:")
+            print(f"Loss: {loss.item():.4f}")
+            print(f"Accuracy: {accuracy.item()*100:.2f}%")
+            
+            if args.verbose:
+                correct = (pred_labels == y_test).sum().item()
+                total = len(y_test)
+                print(f"Correct predictions: {correct}/{total}")
+                
+    except FileNotFoundError:
+        print("No model found! Train first.")
+
+def make_prediction(args):
+    print("Making prediction...")
+    try:
+        model = SeismicTsunamiEventLinkageModel(
+            input_size=10, 
+            hidden_size=128, 
+            hidden_size2=64, 
+            hidden_size3=32, 
+            output_size=1
+        )
+        model.load_state_dict(torch.load(args.model_path))
+        model.eval()
+        
+        features = [
+            args.magnitude,
+            args.cdi or 0,
+            args.mmi or 0,
+            args.sig or 0,
+            args.nst or 0,
+            args.dmin or 0,
+            args.gap or 0,
+            args.depth,
+            args.latitude,
+            args.longitude
+        ]
+        
+        x = torch.tensor([features], dtype=torch.float32)
+        
+        with torch.no_grad():
+            prob = model(x).item()
+            prediction = "TSUNAMI LIKELY" if prob > args.threshold else "NO TSUNAMI"
+            confidence = max(prob, 1-prob)
+            
+            print("\nPrediction Results:")
+            print(f"Prediction: {prediction}")
+            print(f"Probability: {prob:.4f}")
+            print(f"Confidence: {confidence:.4f}")
+            
+            if prob > 0.7:
+                print("HIGH RISK: Immediate action recommended")
+            elif prob > 0.4:
+                print("MEDIUM RISK: Monitor situation closely")
+            else:
+                print("LOW RISK: Standard monitoring")
+            
+    except FileNotFoundError:
+        print("No model found! Train first.")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Tsunami Predictor - Deep Learning Model for Tsunami Prediction',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  Train a model:
+    ./tsunami train --epochs 10000 --patience 100
+    ./tsunami train --epochs 5000 --learning-rate 0.001
+        
+  Test the model:
+    ./tsunami test
+    ./tsunami test --threshold 0.7 --verbose
+        
+  Make a prediction:
+    ./tsunami predict --magnitude 7.2 --depth 10.5 --latitude 35.6 --longitude 139.7
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
+    
+    # Train command
+    train_parser = subparsers.add_parser('train', help='Train the model')
+    train_parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs')
+    train_parser.add_argument('--patience', type=int, default=100, help='Early stopping patience')
+    train_parser.add_argument('--learning-rate', type=float, default=0.001, help='Learning rate')
+    train_parser.add_argument('--save-path', type=str, default='models/tsunami_model.pth', help='Where to save model')
+    train_parser.add_argument('--verbose', action='store_true', help='Print detailed progress')
+    
+    # Test command
+    test_parser = subparsers.add_parser('test', help='Test the model')
+    test_parser.add_argument('--threshold', type=float, default=0.5, help='Classification threshold')
+    test_parser.add_argument('--verbose', action='store_true', help='Show detailed metrics')
+    test_parser.add_argument('--model-path', type=str, default='models/tsunami_model.pth', help='Model to test')
+    
+    # Predict command
+    predict_parser = subparsers.add_parser('predict', help='Make a single prediction')
+    predict_parser.add_argument('--magnitude', type=float, required=True, help='Earthquake magnitude')
+    predict_parser.add_argument('--cdi', type=float, help='Community Decimal Intensity')
+    predict_parser.add_argument('--mmi', type=float, help='Modified Mercalli Intensity')
+    predict_parser.add_argument('--sig', type=float, help='Event significance score')
+    predict_parser.add_argument('--nst', type=float, help='Number of stations')
+    predict_parser.add_argument('--dmin', type=float, help='Distance to nearest station')
+    predict_parser.add_argument('--gap', type=float, help='Azimuthal gap')
+    predict_parser.add_argument('--depth', type=float, required=True, help='Earthquake depth')
+    predict_parser.add_argument('--latitude', type=float, required=True, help='Epicenter latitude')
+    predict_parser.add_argument('--longitude', type=float, required=True, help='Epicenter longitude')
+    predict_parser.add_argument('--threshold', type=float, default=0.5, help='Classification threshold')
+    predict_parser.add_argument('--model-path', type=str, default='models/tsunami_model.pth', help='Model to use')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'train':
+        train(args)
+    elif args.command == 'test':
+        test(args)
+    elif args.command == 'predict':
+        make_prediction(args)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
