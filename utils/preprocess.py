@@ -16,5 +16,5 @@ def preprocess():
     x_train,x_test,y_train,y_test = train_test_split(X,y,test_size=0.2,train_size=0.8,random_state=42)
     #returning training and testing sets
     return x_train,x_test,y_train,y_test
-
     
+
