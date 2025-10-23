@@ -10,16 +10,16 @@ import sklearn.datasets as ds
 import random 
 
 class SeismicTsunamiEventLinkageModel(nn.Module):
-    def __init__self(self, input_size, hidden_size, output_size):
+    def __init__(self, input_size, hidden_size, hidden_size2, hidden_size3, output_size):
         super(SeismicTsunamiEventLinkageModel, self).__init__()
         #Linear input layer to first hidden layer   
         self.fc1 = nn.Linear(input_size, hidden_size)
         #Linear first hidden layer to second hidden layer
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size2)
         #Linear second hidden layer to third hidden layer
-        self.fc3 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size2, hidden_size3)
         #Linear third hidden layer to output layer
-        self.fc4 = nn.Linear(hidden_size, output_size)
+        self.fc4 = nn.Linear(hidden_size3, output_size)
 
 
     def forward(self, x):
@@ -28,7 +28,7 @@ class SeismicTsunamiEventLinkageModel(nn.Module):
         #second hidden layer
         x = torch.relu(self.fc2(x))
         #third hidden layer
-        x = torch.gelu(self.fc3(x))
+        x = torch.relu(self.fc3(x))
         #output layer
-        x = self.fc4(x)
+        x = torch.sigmoid(self.fc4(x))
         return x
